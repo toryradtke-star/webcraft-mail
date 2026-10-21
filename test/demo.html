@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Demo site</title>
+<style>body{font:16px/1.6 system-ui,sans-serif;max-width:720px;margin:0 auto;padding:24px 16px;color:#1f2937}nav a{margin-right:12px}.tall{height:1400px;background:linear-gradient(#f9fafb,#e5e7eb);border-radius:8px;margin:16px 0}footer{border-top:1px solid #e5e7eb;padding-top:24px}</style>
+<script src="/wm.js" data-site="demo-gym" async></script>
+</head><body>
+<h1>Northwoods Fitness (demo)</h1>
+<nav><a href="/demo" data-spa>Home</a><a href="/demo/pricing" data-spa>Pricing</a><a href="/demo/join" data-spa>Join</a>
+<button id="joined" type="button">Track "Joined"</button> <button id="open" type="button">wm.open("popup-tour")</button></nav>
+<p id="where"></p>
+<div class="tall">Scroll down…</div>
+<footer><div id="wm-footer"></div></footer>
+<script>
+document.querySelectorAll('[data-spa]').forEach(a => a.onclick = e => { e.preventDefault(); history.pushState({}, '', a.href); document.getElementById('where').textContent = 'Path: ' + location.pathname; });
+document.getElementById('joined').onclick = () => wm.track('Joined', {});
+document.getElementById('open').onclick = () => wm.open('popup-tour');
+document.getElementById('where').textContent = 'Path: ' + location.pathname;
+</script>
+</body></html>

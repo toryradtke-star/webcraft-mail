@@ -1,0 +1,26 @@
+{
+  "name": "webcraft-mail",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lightweight signup forms, onsite identity and email flows for Webcraft client sites.",
+  "author": "Tory Radtke (https://webcraftmn.com)",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\"",
+    "dev": "node --disable-warning=ExperimentalWarning scripts/dev.ts",
+    "build": "node --disable-warning=ExperimentalWarning scripts/build.ts",
+    "check": "tsc -p ."
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.2"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.15",
+    "@types/node": "^22.18.12",
+    "esbuild": "^0.25.11",
+    "typescript": "^5.9.3"
+  }
+}

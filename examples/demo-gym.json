@@ -1,0 +1,59 @@
+{
+  "id": "demo-gym",
+  "name": "Northwoods Fitness",
+  "origins": ["https://northwoods-fitness.example"],
+  "from": "Northwoods Fitness <hello@northwoods-fitness.example>",
+  "replyTo": "owner@northwoods-fitness.example",
+  "address": "100 Main St, Pine City, MN 55063",
+  "brandColor": "#0f766e",
+  "dailyCap": 100,
+  "lists": [{ "id": "newsletter", "name": "Newsletter" }],
+  "forms": [
+    {
+      "id": "popup-tour",
+      "type": "popup",
+      "list": "newsletter",
+      "title": "Get a free week",
+      "body": "Join the list and we'll send you a free 7-day pass.",
+      "fields": ["first_name", "email"],
+      "button": "Send my pass",
+      "success": "Check your inbox, your pass is on the way.",
+      "consent": "By signing up you agree to get emails from Northwoods Fitness. Unsubscribe anytime.",
+      "triggers": { "delaySec": 3, "scrollPct": 30, "urlExclude": ["/join"], "device": "both", "cooldownDays": 7 }
+    },
+    {
+      "id": "footer",
+      "type": "embed",
+      "target": "#wm-footer",
+      "list": "newsletter",
+      "title": "Monthly gym news",
+      "fields": ["email"],
+      "button": "Subscribe",
+      "success": "You're on the list.",
+      "consent": "By signing up you agree to get emails from Northwoods Fitness. Unsubscribe anytime."
+    }
+  ],
+  "flows": [
+    {
+      "id": "welcome",
+      "name": "Welcome series",
+      "enabled": true,
+      "trigger": { "type": "subscribed", "list": "newsletter" },
+      "steps": [
+        { "after": "0m", "template": "welcome-1" },
+        { "after": "2d", "template": "welcome-2", "unlessEvent": "Joined" }
+      ]
+    },
+    {
+      "id": "pricing-nudge",
+      "enabled": true,
+      "trigger": { "type": "event", "name": "Viewed Page", "pathPrefix": "/pricing" },
+      "steps": [{ "after": "1d", "template": "pricing-1", "unlessEvent": "Joined" }]
+    }
+  ],
+  "templates": {
+    "welcome-1": { "subject": "Your free week, {{first_name|friend}}", "preheader": "Show this at the front desk", "body": "# Welcome, {{first_name|friend}}!\n\nHere's your free 7-day pass. Show this email at the desk.\n\n[[See the hours]](https://northwoods-fitness.example/hours)" },
+    "welcome-2": { "subject": "How was your first visit?", "body": "Hi {{first_name|there}},\n\nReady to keep going? Memberships start at **$29 a month**.\n\n[[Join online]](https://northwoods-fitness.example/join)" },
+    "pricing-1": { "subject": "Questions about memberships?", "body": "Hi {{first_name|there}},\n\nSaw you checking out our prices. Reply to this email with any question.\n\n- No contracts\n- 24/7 keycard access" }
+  }
+}
