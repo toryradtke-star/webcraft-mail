@@ -9,16 +9,30 @@
  *   POST /api/identify           ties a browser to the person who clicked an email
  * From email:
  *   GET  /c  click redirect · GET /o  open pixel · GET|POST /u  unsubscribe
+ *   POST /api/lead               a lead form (CRM contact, inbox, workflows)
+ * Booking (served from this domain, can be iframed):
+ *   GET  /book/<site>/<calendar>  the booking page · GET /api/slots · POST /api/book
+ *   GET|POST /appt  an appointment's page (cancel) · GET /appt.ics
+ * Owner app:
+ *   /app/ (static) · GET|POST /app/auth (emailed sign-in) · /app/api/* (session cookie)
  * Machine:
- *   GET  /api/cron               due flow steps and broadcasts (CRON_SECRET)
- *   POST /api/webhooks/resend    bounces and complaints (Svix-signed)
- *   /api/admin/*                 the hub's push, broadcast and stats (ADMIN_TOKEN)
+ *   GET  /api/cron               due flow steps, workflows, reminders, broadcasts (CRON_SECRET)
+ *   POST /api/webhooks/resend    bounces, complaints and inbound replies (Svix-signed)
+ *   POST /api/webhooks/twilio    inbound texts · /api/webhooks/twilio/status delivery reports
+ *   /api/admin/*                 the hub's push, broadcast, stats and CRM counts (ADMIN_TOKEN)
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { configProblems, flowHashes, publicForms, type SiteConfig, type Template } from './config.ts';
 import { esc } from './render.ts';
 import { enroll, loadSite, runBroadcasts, runDue, type Env, type Site } from './runner.ts';
 import { sign, urlHash, verify } from './tokens.ts';
+import { appointmentPage, getAppointment, ics, runReminders, Taken } from './calendar.ts';
+import { inboundEmail, inboundSms, smsStatus } from './inbox.ts';
+import { BadInput, bookingPage, slots, submitBooking, submitLead } from './leads.ts';
+import { api as ownerApi, auth as ownerAuth } from './owner.ts';
+import { twilioValid } from './sms.ts';
+import { runWorkflows } from './workflows.ts';
+import { crmAdmin } from './crm-admin.ts';
 
 const EMAIL = /^[^\s@<>()",;:]{1,64}@[a-z0-9.-]{1,190}\.[a-z]{2,24}$/i;
 const ANON = /^[A-Za-z0-9_-]{8,64}$/;
@@ -79,7 +93,9 @@ async function linkVisitor(env: Env, site: string, anonId: string | undefined, p
 
 async function subscribe(env: Env, site: Site, req: Request, b: any) {
   const form = site.config.forms.find((f) => f.id === b.form);
-  if (!form) throw new HttpError(400, 'unknown form');
+  // Lead forms post to /api/lead; a signup form always has a list (the validator checks).
+  if (!form || form.kind === 'lead' || !form.list) throw new HttpError(400, 'unknown form');
+  const list = form.list;
   // The hidden field only bots fill in. Say yes, store nothing.
   if (b.company) return { ok: true };
   const email = String(b.email ?? '').trim().toLowerCase();
@@ -104,12 +120,12 @@ async function subscribe(env: Env, site: Site, req: Request, b: any) {
   }
   const url = String(b.url ?? '').slice(0, 500) || null;
   await env.sql(`INSERT INTO consents (profile_id, site, form_id, list, wording, url, ip, user_agent, at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [profileId, site.config.id, form.id, form.list, form.consent, url, ip || null, (req.headers.get('user-agent') ?? '').slice(0, 300), now]);
-  const joined = await env.sql(`INSERT INTO memberships (profile_id, list, at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING list`, [profileId, form.list, now]);
+    [profileId, site.config.id, form.id, list, form.consent, url, ip || null, (req.headers.get('user-agent') ?? '').slice(0, 300), now]);
+  const joined = await env.sql(`INSERT INTO memberships (profile_id, list, at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING RETURNING list`, [profileId, list, now]);
   await linkVisitor(env, site.config.id, b.anon_id, profileId);
   await env.sql(`INSERT INTO events (site, anon_id, profile_id, name, props, url, at) VALUES ($1,$2,$3,'Subscribed',$4,$5,$6)`,
-    [site.config.id, ANON.test(b.anon_id ?? '') ? b.anon_id : null, profileId, JSON.stringify({ form: form.id, list: form.list }), url, now]);
-  if (joined.length) await enroll(env, site, profileId, { type: 'subscribed', list: form.list });
+    [site.config.id, ANON.test(b.anon_id ?? '') ? b.anon_id : null, profileId, JSON.stringify({ form: form.id, list }), url, now]);
+  if (joined.length) await enroll(env, site, profileId, { type: 'subscribed', list });
   // A welcome step with after "0m" goes out now rather than at the next cron.
   await runDue(env, { profileId, limit: 5 });
   return { ok: true, token: sign(env.secret, { k: 'id', p: profileId, s: site.config.id, exp: env.now().getTime() + 365 * 86_400_000 }) };
@@ -185,6 +201,7 @@ async function resendWebhook(env: Env, req: Request): Promise<Response> {
   const payload = await req.text();
   if (!env.webhookSecret || !svixValid(env.webhookSecret, req.headers, payload, env.now())) return json({ error: 'bad signature' }, 401);
   const e = JSON.parse(payload);
+  if (e.type === 'email.received') return json({ ok: true, result: await inboundEmail(env, e.data ?? {}) });
   const status = e.type === 'email.complained' ? 'complained'
     : e.type === 'email.bounced' && (e.data?.bounce?.type ?? 'Permanent') !== 'Transient' ? 'bounced' : null;
   if (status && e.data?.email_id) {
@@ -195,6 +212,30 @@ async function resendWebhook(env: Env, req: Request): Promise<Response> {
     }
   }
   return json({ ok: true });
+}
+
+/** Twilio posts form-encoded; the signature covers the exact public URL. */
+async function twilioWebhook(env: Env, req: Request, url: URL): Promise<Response> {
+  const params = new URLSearchParams(await req.text());
+  if (!env.twilioAuthToken || !twilioValid(env.twilioAuthToken, `${env.publicUrl}${url.pathname}${url.search}`, params, req.headers.get('x-twilio-signature'))) return json({ error: 'bad signature' }, 401);
+  if (url.pathname.endsWith('/status')) await smsStatus(env, params); else await inboundSms(env, params);
+  // An empty TwiML reply: nothing is texted back automatically (Twilio itself answers STOP and HELP).
+  return new Response('<?xml version="1.0" encoding="UTF-8"?><Response></Response>', { headers: { 'content-type': 'text/xml' } });
+}
+
+async function appt(env: Env, req: Request, url: URL): Promise<Response> {
+  const t = url.searchParams.get('t') ?? '';
+  const c = verify(env.secret, t, 'appt');
+  const site = c ? await loadSite(env.sql, c.s) : null;
+  const a = site ? await getAppointment(env, c!.s, c!.a) : null;
+  if (!site || !a) return page('Not found', '<p>This link isn\'t valid.</p>', 400);
+  if (url.pathname === '/appt.ics') {
+    const cal = site.config.crm?.calendars?.find((x) => x.id === a.calendar);
+    if (!cal) return page('Not found', '<p>This calendar no longer exists.</p>', 404);
+    return new Response(ics(site, cal, a), { headers: { 'content-type': 'text/calendar; charset=utf-8', 'content-disposition': 'attachment; filename="appointment.ics"' } });
+  }
+  const r = await appointmentPage(env, site, a, t, req.method);
+  return page(r.title, r.html);
 }
 
 async function admin(env: Env, req: Request, url: URL): Promise<Response> {
@@ -227,6 +268,7 @@ async function admin(env: Env, req: Request, url: URL): Promise<Response> {
     return json({ ok: true, queued: b.id, firstBatch: sent });
   }
   if (path === '/stats' && req.method === 'GET') return json(await stats(env, siteId, Number(url.searchParams.get('days') ?? 30)));
+  if (path.startsWith('/crm/') && req.method === 'GET') return json(await crmAdmin(env, site, path.slice(5), url.searchParams));
   return json({ error: 'not found' }, 404);
 }
 
@@ -255,10 +297,40 @@ export async function handle(env: Env, req: Request): Promise<Response> {
     if (p === '/o') return await open(env, url);
     if (p === '/u') return await unsubscribe(env, req, url);
     if (p === '/api/webhooks/resend' && req.method === 'POST') return await resendWebhook(env, req);
+    if (p.startsWith('/api/webhooks/twilio') && req.method === 'POST') return await twilioWebhook(env, req, url);
+    if (p.startsWith('/app/api/')) return await ownerApi(env, req, url);
+    if (p === '/app/auth') return await ownerAuth(env, req, url);
+    if (p === '/appt' || p === '/appt.ics') return await appt(env, req, url);
+    if (p.startsWith('/book/') && req.method === 'GET') {
+      const [, , siteId, calId] = p.split('/');
+      const site = /^[a-z0-9-]{1,41}$/.test(siteId ?? '') ? await loadSite(env.sql, siteId) : null;
+      const cal = site?.config.crm?.calendars?.find((c) => c.id === calId);
+      if (!site || !cal) return page('Not found', '<p>This booking page doesn\'t exist.</p>', 404);
+      return new Response(bookingPage(site, cal), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
+    }
+    if (p === '/api/slots' && req.method === 'GET') {
+      const site = await loadSite(env.sql, url.searchParams.get('site') ?? '');
+      if (!site?.config.crm) return json({ error: 'unknown site' }, 404);
+      return json({ slots: await slots(env, site, url.searchParams.get('calendar') ?? '', url.searchParams.get('from')) }, 200, { 'cache-control': 'no-store' });
+    }
+    if (p === '/api/book' && req.method === 'POST') {
+      // The booking page is on this domain; a site may also post from its own origin.
+      const b = await body(req);
+      const site = /^[a-z0-9-]{1,41}$/.test(String(b.site ?? '')) ? await loadSite(env.sql, b.site) : null;
+      if (!site?.config.crm) return json({ error: 'unknown site' }, 404);
+      const origin = req.headers.get('origin');
+      if (origin !== new URL(env.publicUrl).origin && !site.config.origins.includes(origin ?? '')) return json({ error: 'origin not allowed' }, 403);
+      try {
+        return json(await submitBooking(env, site, b, clientIp(req), req.headers.get('user-agent') ?? ''));
+      } catch (e) {
+        if (e instanceof BadInput || e instanceof Taken || /^(no calendar|that time)/.test((e as Error).message)) return json({ error: (e as Error).message }, e instanceof Taken ? 409 : 400);
+        throw e;
+      }
+    }
     if (p.startsWith('/api/admin/')) return await admin(env, req, url);
     if (p === '/api/cron') {
       if (!env.cronSecret || !same(bearer(req), env.cronSecret)) return json({ error: 'unauthorized' }, 401);
-      return json({ flows: await runDue(env, { limit: 50 }), broadcasts: await runBroadcasts(env, { limit: 50 }) });
+      return json({ flows: await runDue(env, { limit: 50 }), workflows: await runWorkflows(env, { limit: 100 }), reminders: await runReminders(env), broadcasts: await runBroadcasts(env, { limit: 50 }) });
     }
     if (p === '/api/health') return json({ ok: true });
 
@@ -278,6 +350,9 @@ export async function handle(env: Env, req: Request): Promise<Response> {
     // Browsers send Origin on every POST; a missing or foreign one is refused.
     if (!cors) return json({ error: 'origin not allowed' }, 403);
     if (p === '/api/subscribe' && isPost) return json(await subscribe(env, site, req, b), 200, cors);
+    if (p === '/api/lead' && isPost) {
+      try { return json(await submitLead(env, site, b, clientIp(req), req.headers.get('user-agent') ?? ''), 200, cors); } catch (e) { if (e instanceof BadInput) throw new HttpError(400, e.message); throw e; }
+    }
     if (p === '/api/track' && isPost) return json(await track(env, site, b), 200, cors);
     if (p === '/api/identify' && isPost) {
       const c = verify(env.secret, b.token, 'id', env.now().getTime());

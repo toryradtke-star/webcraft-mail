@@ -5,6 +5,7 @@ import { migrate, neonSql, type Sql } from './db.ts';
 import { resendMailer } from './mail.ts';
 import type { Env } from './runner.ts';
 import { sendResponse, toRequest } from './node.ts';
+import { twilioSender, type ReceivedEmail } from './sms.ts';
 
 let ready: Promise<Env> | undefined;
 
@@ -14,9 +15,20 @@ function need(k: string): string {
   return v;
 }
 
+/** A received email's content from Resend (the key needs full access, not sending only). */
+function resendReceiver(apiKey: string) {
+  return async (id: string): Promise<ReceivedEmail> => {
+    const res = await fetch(`https://api.resend.com/emails/receiving/${encodeURIComponent(id)}`, { headers: { authorization: `Bearer ${apiKey}` } });
+    const b: any = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(`Resend ${res.status}: ${b.message ?? 'could not read the received email'}`);
+    return { from: b.from, to: b.to ?? [], subject: b.subject ?? '', text: b.text ?? null, html: b.html ?? null };
+  };
+}
+
 async function boot(): Promise<Env> {
   const sql: Sql = await neonSql(need('DATABASE_URL'));
   await migrate(sql);
+  const { TWILIO_ACCOUNT_SID: sid, TWILIO_AUTH_TOKEN: twilio, INBOUND_DOMAIN: inbound } = process.env;
   return {
     sql,
     mailer: resendMailer(need('RESEND_API_KEY')),
@@ -27,6 +39,11 @@ async function boot(): Promise<Env> {
     webhookSecret: process.env.RESEND_WEBHOOK_SECRET,
     now: () => new Date(),
     paceMs: 250,
+    // Texting and inbound replies are optional: without them the inbox is email-out only.
+    sms: sid && twilio ? twilioSender(sid, twilio) : undefined,
+    twilioAuthToken: twilio,
+    inboundDomain: inbound,
+    receivedEmail: inbound ? resendReceiver(need('RESEND_API_KEY')) : undefined,
   };
 }
 

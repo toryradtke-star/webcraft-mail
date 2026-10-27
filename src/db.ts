@@ -112,6 +112,139 @@ CREATE TABLE IF NOT EXISTS sends (
 );
 CREATE INDEX IF NOT EXISTS sends_site ON sends (site, at);
 CREATE INDEX IF NOT EXISTS sends_resend ON sends (resend_id);
+
+-- CRM (2026-10-27). A profile is the contact: email is optional once a phone is known.
+-- status is email: subscribed (marketing) | none (contact only: workflow and
+-- appointment mail, never broadcasts or flows) | unsubscribed | bounced | complained.
+-- sms_status: none | consented (ticked the box: automated texts) | stopped (replied STOP).
+ALTER TABLE profiles ALTER COLUMN email DROP NOT NULL;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS last_name text;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS phone text;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS sms_status text NOT NULL DEFAULT 'none';
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS source text;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS attribution jsonb;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}';
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS custom jsonb NOT NULL DEFAULT '{}';
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS owner text;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS last_activity_at timestamptz;
+CREATE UNIQUE INDEX IF NOT EXISTS profiles_phone ON profiles (site, phone) WHERE phone IS NOT NULL;
+CREATE INDEX IF NOT EXISTS profiles_activity ON profiles (site, last_activity_at);
+-- status: open | won | lost | abandoned
+CREATE TABLE IF NOT EXISTS opportunities (
+  id bigserial PRIMARY KEY,
+  site text NOT NULL,
+  contact_id bigint NOT NULL,
+  pipeline text NOT NULL,
+  stage text NOT NULL,
+  status text NOT NULL DEFAULT 'open',
+  name text,
+  value numeric(12,2) NOT NULL DEFAULT 0,
+  source text,
+  lost_reason text,
+  owner text,
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL,
+  stage_at timestamptz NOT NULL,
+  status_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS opportunities_board ON opportunities (site, pipeline, status);
+CREATE INDEX IF NOT EXISTS opportunities_contact ON opportunities (contact_id);
+CREATE TABLE IF NOT EXISTS notes (
+  id bigserial PRIMARY KEY,
+  site text NOT NULL,
+  contact_id bigint NOT NULL,
+  body text NOT NULL,
+  author text NOT NULL,
+  at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS notes_contact ON notes (contact_id, at);
+CREATE TABLE IF NOT EXISTS tasks (
+  id bigserial PRIMARY KEY,
+  site text NOT NULL,
+  contact_id bigint,
+  title text NOT NULL,
+  body text,
+  due_at timestamptz,
+  assigned_to text,
+  done_at timestamptz,
+  created_by text NOT NULL,
+  created_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS tasks_open ON tasks (site, done_at, due_at);
+-- status: booked | confirmed | cancelled | showed | noshow. seat makes double booking impossible:
+-- a slot with maxPerSlot n has seats 0..n-1, and an active seat is unique.
+CREATE TABLE IF NOT EXISTS appointments (
+  id bigserial PRIMARY KEY,
+  site text NOT NULL,
+  calendar text NOT NULL,
+  contact_id bigint NOT NULL,
+  start_at timestamptz NOT NULL,
+  end_at timestamptz NOT NULL,
+  seat int NOT NULL DEFAULT 0,
+  status text NOT NULL DEFAULT 'booked',
+  notes text,
+  booked_by text NOT NULL,
+  reminded text[] NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL,
+  status_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS appointments_seat ON appointments (site, calendar, start_at, seat) WHERE status <> 'cancelled';
+CREATE INDEX IF NOT EXISTS appointments_when ON appointments (site, start_at);
+-- Time the owner blocked off (holidays, a dentist visit). calendar null blocks every calendar.
+CREATE TABLE IF NOT EXISTS blocks (
+  id bigserial PRIMARY KEY,
+  site text NOT NULL,
+  calendar text,
+  start_at timestamptz NOT NULL,
+  end_at timestamptz NOT NULL,
+  reason text,
+  created_by text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS blocks_when ON blocks (site, start_at);
+-- The inbox: one conversation per contact, every channel. direction in | out.
+-- status: queued | sent | delivered | failed | received | skipped
+CREATE TABLE IF NOT EXISTS messages (
+  id bigserial PRIMARY KEY,
+  site text NOT NULL,
+  contact_id bigint NOT NULL,
+  channel text NOT NULL,
+  direction text NOT NULL,
+  subject text,
+  body text NOT NULL,
+  status text NOT NULL,
+  provider_id text,
+  error text,
+  author text NOT NULL,
+  at timestamptz NOT NULL,
+  read_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS messages_contact ON messages (contact_id, at);
+CREATE INDEX IF NOT EXISTS messages_inbox ON messages (site, at);
+CREATE UNIQUE INDEX IF NOT EXISTS messages_provider ON messages (channel, provider_id) WHERE provider_id IS NOT NULL;
+-- One workflow run. state: active | done | exited. ref ties a run to the opportunity
+-- or appointment that started it ("appt:12"), so appointment triggers can run per appointment.
+CREATE TABLE IF NOT EXISTS runs (
+  id bigserial PRIMARY KEY,
+  site text NOT NULL,
+  workflow text NOT NULL,
+  contact_id bigint NOT NULL,
+  ref text,
+  step int NOT NULL DEFAULT 0,
+  next_at timestamptz NOT NULL,
+  state text NOT NULL DEFAULT 'active',
+  started_at timestamptz NOT NULL,
+  claimed_until timestamptz,
+  ended_why text
+);
+CREATE INDEX IF NOT EXISTS runs_due ON runs (state, next_at);
+CREATE INDEX IF NOT EXISTS runs_contact ON runs (site, workflow, contact_id);
+-- Owner-app sign-in. The token is never stored, only its hash.
+CREATE TABLE IF NOT EXISTS sessions (
+  hash text PRIMARY KEY,
+  email text NOT NULL,
+  created_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL
+);
 `;
 
 export async function migrate(sql: Sql): Promise<void> {

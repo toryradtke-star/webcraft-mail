@@ -9,7 +9,11 @@ export type Claims =
   | { k: 'unsub'; p: number; s: string }
   | { k: 'open'; send: number }
   | { k: 'click'; send: number; h: string }
-  | { k: 'id'; p: number; s: string; exp: number };
+  | { k: 'id'; p: number; s: string; exp: number }
+  /** An appointment's own page: details, calendar file, cancel. */
+  | { k: 'appt'; a: number; s: string }
+  /** The owner app's emailed sign-in link. */
+  | { k: 'login'; e: string; exp: number };
 
 const b64 = (b: Buffer | string) => Buffer.from(b).toString('base64url');
 
@@ -28,7 +32,7 @@ export function verify<K extends Claims['k']>(secret: string, token: string | nu
   let c: any;
   try { c = JSON.parse(Buffer.from(body, 'base64url').toString()); } catch { return null; }
   if (c?.k !== kind) return null;
-  if (c.k === 'id' && !(c.exp > now)) return null;
+  if ((c.k === 'id' || c.k === 'login') && !(c.exp > now)) return null;
   return c;
 }
 

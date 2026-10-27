@@ -11,9 +11,11 @@ export type Outgoing = {
   subject: string;
   html: string;
   text: string;
-  unsubscribeUrl: string;
+  /** Marketing and contact mail; internal notices to the business leave it out. */
+  unsubscribeUrl?: string;
   idempotencyKey: string;
   tags?: Record<string, string>;
+  attachments?: { filename: string; content: string; contentType?: string }[];
 };
 
 export type Mailer = (m: Outgoing) => Promise<{ id: string }>;
@@ -25,7 +27,8 @@ export function resendMailer(apiKey: string, fetchImpl: typeof fetch = fetch): M
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json', 'idempotency-key': m.idempotencyKey },
       body: JSON.stringify({
         from: m.from, to: [m.to], reply_to: m.replyTo, subject: m.subject, html: m.html, text: m.text,
-        headers: { 'List-Unsubscribe': `<${m.unsubscribeUrl}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' },
+        headers: m.unsubscribeUrl ? { 'List-Unsubscribe': `<${m.unsubscribeUrl}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' } : undefined,
+        attachments: m.attachments?.map((a) => ({ filename: a.filename, content: Buffer.from(a.content).toString('base64'), content_type: a.contentType })),
         tags: Object.entries(m.tags ?? {}).map(([name, value]) => ({ name, value: value.replace(/[^A-Za-z0-9_-]/g, '_') })),
       }),
     });

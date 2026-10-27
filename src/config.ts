@@ -6,6 +6,7 @@
  * runner sends only flows whose hash still matches.
  */
 import { createHash } from 'node:crypto';
+import { crmProblems, workflowHashes, type Crm } from './crm-config.ts';
 
 export type Trigger = {
   /** Seconds after page load. */
@@ -24,15 +25,31 @@ export type Trigger = {
   hideIfSubscribed?: boolean;
 };
 
+/** Custom fields are "custom:<key>", from crm.customFields. */
+export type FieldName = 'email' | 'first_name' | 'last_name' | 'phone' | 'message' | `custom:${string}`;
+
 export type Form = {
   id: string;
   type: 'popup' | 'embed';
+  /**
+   * signup (default): joins a list, the proof of opt-in is the consent text.
+   * lead: a contact form for the CRM. It creates or updates a contact and starts
+   * form_submitted workflows; it joins the list only if the person ticks marketingOptIn.
+   */
+  kind?: 'signup' | 'lead';
   /** For embed forms: the CSS selector to render into. */
   target?: string;
-  list: string;
+  /** Required for signup forms; for lead forms, the list the marketing tick-box joins. */
+  list?: string;
   title: string;
   body?: string;
-  fields: ('email' | 'first_name')[];
+  fields: FieldName[];
+  /** Lead forms: fields that must be filled in (email or phone is always required). */
+  required?: FieldName[];
+  /** Lead forms with a phone field: an unticked box with this wording; ticking it allows automated texts. */
+  smsConsent?: string;
+  /** Lead forms: an unticked box with this wording; ticking it joins `list`. */
+  marketingOptIn?: string;
   button: string;
   success: string;
   /** Shown under the button and stored with each signup as the proof of consent. */
@@ -76,6 +93,8 @@ export type SiteConfig = {
   forms: Form[];
   flows: Flow[];
   templates: Record<string, Template>;
+  /** The CRM: pipelines, calendars, workflows, owner-app users, SMS. Absent for email-only sites. */
+  crm?: Crm;
 };
 
 const ID = /^[a-z0-9][a-z0-9-]{0,40}$/;
@@ -105,10 +124,21 @@ export function configProblems(c: SiteConfig): string[] {
     ids.add(f.id);
     need(f.type === 'popup' || f.type === 'embed', `form ${f.id}: type must be popup or embed`);
     need(f.type !== 'embed' || f.target, `form ${f.id}: an embed form needs a target selector`);
-    need(lists.has(f.list), `form ${f.id}: list "${f.list}" isn't in lists`);
-    need(f.fields?.includes('email'), `form ${f.id}: fields must include email`);
     need(f.title && f.button && f.success, `form ${f.id}: title, button and success are required`);
     need((f.consent ?? '').length >= 20, `form ${f.id}: consent wording is required (it is the proof of opt-in)`);
+    const custom = new Set((c.crm?.customFields ?? []).map((x) => `custom:${x.key}`));
+    for (const name of f.fields ?? []) need(['email', 'first_name', 'last_name', 'phone', 'message'].includes(name) || custom.has(name), `form ${f.id}: field "${name}" isn't a known field or a crm custom field`);
+    if (f.kind === 'lead') {
+      need(c.crm, `form ${f.id}: lead forms need a crm block`);
+      need(f.fields?.includes('email') || f.fields?.includes('phone'), `form ${f.id}: a lead form needs an email or phone field`);
+      need(!f.marketingOptIn || (f.list && lists.has(f.list)), `form ${f.id}: marketingOptIn needs a list that's in lists`);
+      need(!f.smsConsent || (f.fields.includes('phone') && c.crm?.sms), `form ${f.id}: smsConsent needs a phone field and crm.sms`);
+      for (const r of f.required ?? []) need(f.fields.includes(r), `form ${f.id}: required field "${r}" isn't in fields`);
+    } else {
+      need(!f.kind || f.kind === 'signup', `form ${f.id}: kind must be signup or lead`);
+      need(f.list && lists.has(f.list), `form ${f.id}: list "${f.list}" isn't in lists`);
+      need(f.fields?.includes('email'), `form ${f.id}: fields must include email`);
+    }
   }
   const fids = new Set<string>();
   for (const fl of c.flows ?? []) {
@@ -124,6 +154,7 @@ export function configProblems(c: SiteConfig): string[] {
   }
   for (const [k, t] of Object.entries(c.templates ?? {})) need(t.subject && t.body, `template ${k}: subject and body are required`);
   if (c.dailyCap !== undefined) need(Number.isInteger(c.dailyCap) && c.dailyCap > 0, 'dailyCap must be a positive whole number');
+  if (c.crm) out.push(...crmProblems(c));
   return out;
 }
 
@@ -140,7 +171,8 @@ export function flowHash(c: SiteConfig, f: Flow): string {
   return createHash('sha256').update(canonical({ flow: f, templates, from: c.from, address: c.address })).digest('hex').slice(0, 16);
 }
 
-export const flowHashes = (c: SiteConfig): Record<string, string> => Object.fromEntries(c.flows.map((f) => [f.id, flowHash(c, f)]));
+/** Flow hashes by flow id, and workflow hashes as "wf:<id>". */
+export const flowHashes = (c: SiteConfig): Record<string, string> => ({ ...Object.fromEntries(c.flows.map((f) => [f.id, flowHash(c, f)])), ...workflowHashes(c) });
 
 /** What the onsite script gets: forms only, nothing about flows or the sender. */
 export function publicForms(c: SiteConfig) {
@@ -148,7 +180,14 @@ export function publicForms(c: SiteConfig) {
     site: c.id,
     color: c.brandColor ?? '#111827',
     privacyUrl: c.privacyUrl,
-    forms: c.forms.map(({ id, type, target, title, body, fields, button, success, consent, triggers }) =>
-      ({ id, type, target, title, body, fields, button, success, consent, triggers: { hideIfSubscribed: true, cooldownDays: 7, device: 'both', ...triggers } })),
+    forms: c.forms.map(({ id, type, kind, target, title, body, fields, required, button, success, consent, smsConsent, marketingOptIn, triggers }) =>
+      ({ id, type, kind: kind ?? 'signup', target, title, body, button, success, consent, smsConsent, marketingOptIn,
+        fields: fields.map((name) => {
+          const key = name.startsWith('custom:') ? name.slice(7) : null;
+          const cf = key ? c.crm?.customFields?.find((x) => x.key === key) : null;
+          return cf ? { name, label: cf.label, type: cf.type, options: cf.options } : name;
+        }),
+        required: kind === 'lead' ? required ?? [] : ['email'],
+        triggers: { hideIfSubscribed: kind !== 'lead', cooldownDays: 7, device: 'both', ...triggers } })),
   };
 }

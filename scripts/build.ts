@@ -19,10 +19,13 @@ writeFileSync(`${out}/config.json`, JSON.stringify({
   version: 3,
   routes: [
     { src: '/wm.js', headers: { 'cache-control': 'public, max-age=300', 'access-control-allow-origin': '*' }, continue: true },
+    // The owner app is static; its API is the function.
+    { src: '/app/?', dest: '/app/index.html', headers: { 'cache-control': 'no-cache', 'x-frame-options': 'DENY' } },
     { handle: 'filesystem' },
     { src: '/(.*)', dest: '/index' },
   ],
-  // Hobby plans allow one cron run a day; signups send their first step inline, so only later steps wait for this.
+  // Hobby plans allow one cron run a day. The CRM needs more (waits, reminders, quiet-hour texts),
+  // so .github/workflows/tick.yml calls /api/cron every 5 minutes; this daily run is the backstop.
   crons: [{ path: '/api/cron', schedule: '0 15 * * *' }],
 }, null, 2));
 console.log(`built ${out}`);

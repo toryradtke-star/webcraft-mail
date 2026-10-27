@@ -4,7 +4,8 @@
  *
  * - Gives each browser an anonymous id (first-party cookie wm_id) and records
  *   page views, including client-side navigations in Next.js and other SPAs.
- * - Shows the site's popup and embedded signup forms by their trigger rules.
+ * - Shows the site's popup and embedded forms by their trigger rules: signup
+ *   forms join a list, lead (contact) forms go to the CRM.
  * - Arriving from an email link (?_wm=…) ties this browser to that person.
  * - Global Privacy Control turns off page-view tracking; forms still work,
  *   because signing up is an explicit opt-in.
@@ -103,9 +104,10 @@
     '.box{background:#fff;color:#111827;border-radius:12px;max-width:420px;width:100%;padding:28px 24px 20px;position:relative;box-shadow:0 20px 50px rgba(0,0,0,.25)}' +
     '.emb{background:transparent;color:inherit;padding:0;max-width:480px}' +
     'h2{font-size:22px;line-height:1.25;margin:0 0 8px}p{font-size:15px;line-height:1.5;margin:0 0 14px}' +
-    'input{display:block;width:100%;font-size:16px;padding:11px 12px;margin:0 0 10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#111827}' +
+    'input,select,textarea{display:block;width:100%;font-family:inherit;font-size:16px;padding:11px 12px;margin:0 0 10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#111827}' +
     'button.go{width:100%;font-size:16px;font-weight:600;padding:12px;border:0;border-radius:8px;color:#fff;cursor:pointer}button.go[disabled]{opacity:.6}' +
     '.x{position:absolute;top:8px;right:8px;width:36px;height:36px;border:0;background:none;font-size:24px;line-height:1;color:#6b7280;cursor:pointer}' +
+    'label.ck{display:flex;gap:8px;align-items:flex-start;font-size:13px;color:#4b5563;margin:0 0 10px}label.ck input{width:auto;margin:3px 0 0;flex:none}' +
     '.fine{font-size:12px;color:#6b7280;margin:10px 0 0}.fine a{color:inherit}.err{color:#b91c1c;font-size:14px;margin:0 0 10px}.hp{position:absolute;left:-9999px;height:0;overflow:hidden}' +
     '@keyframes f{from{opacity:0}to{opacity:1}}@media (prefers-reduced-motion:reduce){.ov{animation:none}}';
 
@@ -132,13 +134,39 @@
     var err = el('p', { class: 'err', role: 'alert', hidden: '' });
     form.appendChild(err);
     var inputs = {};
-    f.fields.forEach(function (name) {
-      var i = el('input', name === 'email'
-        ? { type: 'email', name: 'email', autocomplete: 'email', placeholder: 'Email address', 'aria-label': 'Email address', required: '' }
-        : { type: 'text', name: 'first_name', autocomplete: 'given-name', placeholder: 'First name', 'aria-label': 'First name' });
+    var LABELS = { email: 'Email address', first_name: 'First name', last_name: 'Last name', phone: 'Phone', message: 'Message' };
+    f.fields.forEach(function (field) {
+      // A field is a name, or {name, label, type, options} for a CRM custom field.
+      var name = typeof field === 'string' ? field : field.name;
+      var label = typeof field === 'string' ? LABELS[name] : field.label;
+      var type = typeof field === 'string' ? null : field.type;
+      var req = f.required.indexOf(name) >= 0;
+      var attrs = { name: name, placeholder: label + (req && f.kind === 'lead' ? ' *' : ''), 'aria-label': label };
+      if (req) attrs.required = '';
+      var i;
+      if (name === 'message' || type === 'textarea') { attrs.rows = '3'; i = el('textarea', attrs); }
+      else if (type === 'select') {
+        i = el('select', { name: name, 'aria-label': label });
+        i.appendChild(el('option', { value: '' }, label + (req ? ' *' : '')));
+        (field.options || []).forEach(function (o) { i.appendChild(el('option', { value: o }, o)); });
+      } else {
+        attrs.type = name === 'email' ? 'email' : name === 'phone' ? 'tel' : type === 'number' ? 'number' : type === 'date' ? 'date' : 'text';
+        attrs.autocomplete = { email: 'email', first_name: 'given-name', last_name: 'family-name', phone: 'tel' }[name] || 'off';
+        i = el('input', attrs);
+      }
       inputs[name] = i;
       form.appendChild(i);
     });
+    function tick(name, wording) {
+      var lab = el('label', { class: 'ck' });
+      var box = el('input', { type: 'checkbox', name: name });
+      lab.appendChild(box);
+      lab.appendChild(el('span', {}, wording));
+      form.appendChild(lab);
+      return box;
+    }
+    var smsBox = f.kind === 'lead' && f.smsConsent && inputs.phone ? tick('sms_consent', f.smsConsent) : null;
+    var mktBox = f.kind === 'lead' && f.marketingOptIn ? tick('marketing', f.marketingOptIn) : null;
     var hp = el('div', { class: 'hp', 'aria-hidden': 'true' });
     hp.appendChild(el('input', { type: 'text', name: 'company', tabindex: '-1', autocomplete: 'off' }));
     form.appendChild(hp);
@@ -150,19 +178,27 @@
     form.appendChild(fine);
     form.onsubmit = function (ev) {
       ev.preventDefault();
-      var email = inputs.email.value.trim();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { err.textContent = 'Please enter a valid email address.'; err.hidden = false; inputs.email.focus(); return; }
+      var fail = function (msg, at) { err.textContent = msg; err.hidden = false; if (at) at.focus(); };
+      var body = { form: f.id, company: form.elements.company.value, url: location.href };
+      for (var n in inputs) body[n] = inputs[n].value.trim();
+      if (body.email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(body.email)) return fail('Please enter a valid email address.', inputs.email);
+      if (f.kind !== 'lead' && !body.email) return fail('Please enter a valid email address.', inputs.email);
+      if (f.kind === 'lead' && !body.email && !body.phone) return fail('Please enter your email or phone number.', inputs.email || inputs.phone);
+      for (var r = 0; r < f.required.length; r++) if (inputs[f.required[r]] && !body[f.required[r]]) return fail('Please fill in every field marked *.', inputs[f.required[r]]);
+      if (smsBox) body.sms_consent = smsBox.checked;
+      if (mktBox) body.marketing = mktBox.checked;
+      if (f.kind === 'lead') body.referrer = document.referrer;
       go.disabled = true;
       err.hidden = true;
-      post('/api/subscribe', { form: f.id, email: email, first_name: inputs.first_name ? inputs.first_name.value : undefined, company: form.elements.company.value, url: location.href })
+      post(f.kind === 'lead' ? '/api/lead' : '/api/subscribe', body)
         .then(function () {
-          store('sub', '1');
+          if (f.kind !== 'lead' || body.marketing) store('sub', '1');
           form.replaceWith(el('p', { role: 'status' }, f.success));
         })
-        .catch(function (e) { err.textContent = e.message; err.hidden = false; go.disabled = false; });
+        .catch(function (e) { fail(e.message); go.disabled = false; });
     };
     box.appendChild(form);
-    return { box: box, first: inputs.first_name || inputs.email };
+    return { box: box, first: inputs.first_name || inputs.email || inputs.phone };
   }
 
   function mount(container) {

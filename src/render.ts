@@ -9,7 +9,8 @@ import type { SiteConfig, Template } from './config.ts';
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-export type Vars = { first_name?: string | null; site_name: string };
+/** first_name and site_name always; workflows and bookings add contact and appointment fields. */
+export type Vars = { first_name?: string | null; site_name: string; [key: string]: string | null | undefined };
 
 export function merge(text: string, v: Vars): string {
   return text.replace(/\{\{\s*([a-z_]+)\s*(?:\|([^}]*))?\}\}/g, (_, key: string, fallback = '') => {
@@ -54,12 +55,12 @@ export function toText(md: string): string {
 
 export type Rendered = { subject: string; html: string; text: string };
 
-export function renderEmail(site: SiteConfig, t: Template, v: Vars, opts: { unsubscribeUrl: string; openPixelUrl?: string; link?: Link }): Rendered {
+export function renderEmail(site: SiteConfig, t: Template, v: Vars, opts: { unsubscribeUrl: string; openPixelUrl?: string; link?: Link; reason?: string }): Rendered {
   const color = site.brandColor ?? '#111827';
   const link = opts.link ?? ((u: string) => u);
   const body = merge(t.body, v);
   const domain = site.origins[0]?.replace(/^https?:\/\//, '') ?? site.name;
-  const footer = `You're getting this because you signed up at ${domain}. ${site.name}, ${site.address}.`;
+  const footer = `${opts.reason ?? `You're getting this because you signed up at ${domain}.`} ${site.name}, ${site.address}.`;
   const pre = t.preheader ? `<div style="display:none;max-height:0;overflow:hidden">${esc(merge(t.preheader, v))}</div>` : '';
   const pixel = opts.openPixelUrl ? `<img src="${esc(opts.openPixelUrl)}" width="1" height="1" alt="" style="display:block;border:0">` : '';
   const html = `<!doctype html><html><body style="margin:0;background:#f4f4f5">${pre}

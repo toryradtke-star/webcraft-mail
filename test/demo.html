@@ -8,6 +8,7 @@
 <button id="joined" type="button">Track "Joined"</button> <button id="open" type="button">wm.open("popup-tour")</button></nav>
 <p id="where"></p>
 <div class="tall">Scroll down…</div>
+<section><h2>Contact us</h2><div id="wm-contact"></div><p><a href="/book/demo-gym/tour">Book a free tour</a></p></section>
 <footer><div id="wm-footer"></div></footer>
 <script>
 document.querySelectorAll('[data-spa]').forEach(a => a.onclick = e => { e.preventDefault(); history.pushState({}, '', a.href); document.getElementById('where').textContent = 'Path: ' + location.pathname; });

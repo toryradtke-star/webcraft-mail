@@ -1,13 +1,20 @@
 {
   "id": "demo-gym",
   "name": "Northwoods Fitness",
-  "origins": ["https://northwoods-fitness.example"],
+  "origins": [
+    "https://northwoods-fitness.example"
+  ],
   "from": "Northwoods Fitness <hello@northwoods-fitness.example>",
   "replyTo": "owner@northwoods-fitness.example",
   "address": "100 Main St, Pine City, MN 55063",
   "brandColor": "#0f766e",
   "dailyCap": 100,
-  "lists": [{ "id": "newsletter", "name": "Newsletter" }],
+  "lists": [
+    {
+      "id": "newsletter",
+      "name": "Newsletter"
+    }
+  ],
   "forms": [
     {
       "id": "popup-tour",
@@ -15,11 +22,22 @@
       "list": "newsletter",
       "title": "Get a free week",
       "body": "Join the list and we'll send you a free 7-day pass.",
-      "fields": ["first_name", "email"],
+      "fields": [
+        "first_name",
+        "email"
+      ],
       "button": "Send my pass",
       "success": "Check your inbox, your pass is on the way.",
       "consent": "By signing up you agree to get emails from Northwoods Fitness. Unsubscribe anytime.",
-      "triggers": { "delaySec": 3, "scrollPct": 30, "urlExclude": ["/join"], "device": "both", "cooldownDays": 7 }
+      "triggers": {
+        "delaySec": 3,
+        "scrollPct": 30,
+        "urlExclude": [
+          "/join"
+        ],
+        "device": "both",
+        "cooldownDays": 7
+      }
     },
     {
       "id": "footer",
@@ -27,10 +45,37 @@
       "target": "#wm-footer",
       "list": "newsletter",
       "title": "Monthly gym news",
-      "fields": ["email"],
+      "fields": [
+        "email"
+      ],
       "button": "Subscribe",
       "success": "You're on the list.",
       "consent": "By signing up you agree to get emails from Northwoods Fitness. Unsubscribe anytime."
+    },
+    {
+      "id": "contact",
+      "type": "embed",
+      "kind": "lead",
+      "target": "#wm-contact",
+      "list": "newsletter",
+      "title": "Ask us anything",
+      "body": "We answer within a few hours.",
+      "fields": [
+        "first_name",
+        "last_name",
+        "email",
+        "phone",
+        "custom:goal",
+        "message"
+      ],
+      "required": [
+        "first_name"
+      ],
+      "button": "Send",
+      "success": "Thanks! We'll get back to you soon.",
+      "consent": "We'll use your details to answer you. See our privacy policy.",
+      "smsConsent": "Text me about my question at this number. Msg & data rates may apply. Reply STOP to opt out.",
+      "marketingOptIn": "Also send me the monthly gym newsletter."
     }
   ],
   "flows": [
@@ -38,22 +83,256 @@
       "id": "welcome",
       "name": "Welcome series",
       "enabled": true,
-      "trigger": { "type": "subscribed", "list": "newsletter" },
+      "trigger": {
+        "type": "subscribed",
+        "list": "newsletter"
+      },
       "steps": [
-        { "after": "0m", "template": "welcome-1" },
-        { "after": "2d", "template": "welcome-2", "unlessEvent": "Joined" }
+        {
+          "after": "0m",
+          "template": "welcome-1"
+        },
+        {
+          "after": "2d",
+          "template": "welcome-2",
+          "unlessEvent": "Joined"
+        }
       ]
     },
     {
       "id": "pricing-nudge",
       "enabled": true,
-      "trigger": { "type": "event", "name": "Viewed Page", "pathPrefix": "/pricing" },
-      "steps": [{ "after": "1d", "template": "pricing-1", "unlessEvent": "Joined" }]
+      "trigger": {
+        "type": "event",
+        "name": "Viewed Page",
+        "pathPrefix": "/pricing"
+      },
+      "steps": [
+        {
+          "after": "1d",
+          "template": "pricing-1",
+          "unlessEvent": "Joined"
+        }
+      ]
     }
   ],
   "templates": {
-    "welcome-1": { "subject": "Your free week, {{first_name|friend}}", "preheader": "Show this at the front desk", "body": "# Welcome, {{first_name|friend}}!\n\nHere's your free 7-day pass. Show this email at the desk.\n\n[[See the hours]](https://northwoods-fitness.example/hours)" },
-    "welcome-2": { "subject": "How was your first visit?", "body": "Hi {{first_name|there}},\n\nReady to keep going? Memberships start at **$29 a month**.\n\n[[Join online]](https://northwoods-fitness.example/join)" },
-    "pricing-1": { "subject": "Questions about memberships?", "body": "Hi {{first_name|there}},\n\nSaw you checking out our prices. Reply to this email with any question.\n\n- No contracts\n- 24/7 keycard access" }
+    "welcome-1": {
+      "subject": "Your free week, {{first_name|friend}}",
+      "preheader": "Show this at the front desk",
+      "body": "# Welcome, {{first_name|friend}}!\n\nHere's your free 7-day pass. Show this email at the desk.\n\n[[See the hours]](https://northwoods-fitness.example/hours)"
+    },
+    "welcome-2": {
+      "subject": "How was your first visit?",
+      "body": "Hi {{first_name|there}},\n\nReady to keep going? Memberships start at **$29 a month**.\n\n[[Join online]](https://northwoods-fitness.example/join)"
+    },
+    "pricing-1": {
+      "subject": "Questions about memberships?",
+      "body": "Hi {{first_name|there}},\n\nSaw you checking out our prices. Reply to this email with any question.\n\n- No contracts\n- 24/7 keycard access"
+    },
+    "tour-followup": {
+      "subject": "Want to see the gym, {{first_name|there}}?",
+      "body": "Hi {{first_name|there}},\n\nThanks for reaching out. The easiest next step is a free 20-minute tour.\n\n[[Book a tour]](https://mail.test/book/demo-gym/tour)\n\nNorthwoods Fitness"
+    }
+  },
+  "crm": {
+    "timezone": "America/Chicago",
+    "users": [
+      {
+        "email": "owner@northwoods-fitness.example",
+        "name": "Dana Owner",
+        "role": "owner"
+      }
+    ],
+    "customFields": [
+      {
+        "key": "goal",
+        "label": "Main goal",
+        "type": "select",
+        "options": [
+          "Lose weight",
+          "Get stronger",
+          "Feel better"
+        ]
+      }
+    ],
+    "lostReasons": [
+      "Too expensive",
+      "Joined elsewhere",
+      "No response"
+    ],
+    "pipelines": [
+      {
+        "id": "members",
+        "name": "New members",
+        "stages": [
+          {
+            "id": "new",
+            "name": "New lead"
+          },
+          {
+            "id": "contacted",
+            "name": "Contacted"
+          },
+          {
+            "id": "tour",
+            "name": "Tour booked"
+          },
+          {
+            "id": "trial",
+            "name": "On trial"
+          }
+        ]
+      }
+    ],
+    "calendars": [
+      {
+        "id": "tour",
+        "name": "Gym tour",
+        "description": "A free 20-minute walk-through with a trainer.",
+        "location": "100 Main St, Pine City",
+        "durationMin": 20,
+        "intervalMin": 30,
+        "minNoticeHours": 2,
+        "rangeDays": 21,
+        "askPhone": true,
+        "reminders": [
+          "24h",
+          "2h"
+        ],
+        "hours": {
+          "mon": [
+            [
+              "09:00",
+              "12:00"
+            ],
+            [
+              "16:00",
+              "19:00"
+            ]
+          ],
+          "tue": [
+            [
+              "09:00",
+              "12:00"
+            ]
+          ],
+          "wed": [
+            [
+              "09:00",
+              "12:00"
+            ],
+            [
+              "16:00",
+              "19:00"
+            ]
+          ],
+          "thu": [
+            [
+              "09:00",
+              "12:00"
+            ]
+          ],
+          "sat": [
+            [
+              "10:00",
+              "13:00"
+            ]
+          ]
+        }
+      }
+    ],
+    "sms": {
+      "from": "+16125550100"
+    },
+    "workflows": [
+      {
+        "id": "new-lead",
+        "name": "New lead from the website",
+        "enabled": true,
+        "trigger": {
+          "type": "form_submitted",
+          "form": "contact"
+        },
+        "stopOnResponse": true,
+        "steps": [
+          {
+            "do": "opportunity",
+            "pipeline": "members",
+            "stage": "new",
+            "name": "{{full_name}}"
+          },
+          {
+            "do": "task",
+            "title": "Call {{full_name}} back",
+            "due": "2h"
+          },
+          {
+            "do": "sms",
+            "text": "Hi {{first_name|there}}, thanks for reaching out to Northwoods Fitness! Want to come see the gym? Book a free tour: https://mail.test/book/demo-gym/tour",
+            "when": {
+              "hasPhone": true
+            }
+          },
+          {
+            "do": "wait",
+            "for": "1d"
+          },
+          {
+            "do": "stop",
+            "when": {
+              "replied": true
+            }
+          },
+          {
+            "do": "email",
+            "template": "tour-followup",
+            "when": {
+              "stage": {
+                "pipeline": "members",
+                "stage": "new"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "tour-booked",
+        "name": "Tour booked",
+        "enabled": true,
+        "trigger": {
+          "type": "appointment_booked",
+          "calendar": "tour"
+        },
+        "steps": [
+          {
+            "do": "opportunity",
+            "pipeline": "members",
+            "stage": "tour"
+          },
+          {
+            "do": "add_tag",
+            "tag": "toured"
+          }
+        ]
+      },
+      {
+        "id": "no-show",
+        "name": "Missed tour",
+        "enabled": true,
+        "trigger": {
+          "type": "appointment_status",
+          "calendar": "tour",
+          "status": "noshow"
+        },
+        "steps": [
+          {
+            "do": "task",
+            "title": "{{full_name}} missed their tour: call to rebook",
+            "due": "1h"
+          }
+        ]
+      }
+    ]
   }
 }

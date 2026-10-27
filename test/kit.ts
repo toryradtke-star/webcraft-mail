@@ -5,6 +5,7 @@ import { flowHashes, type SiteConfig } from '../src/config.ts';
 import { migrate, pgliteSql } from '../src/db.ts';
 import type { Outgoing } from '../src/mail.ts';
 import type { Env } from '../src/runner.ts';
+import type { ReceivedEmail, SmsOut } from '../src/sms.ts';
 
 export const ORIGIN = 'https://northwoods-fitness.example';
 export const demo = (): SiteConfig => JSON.parse(readFileSync(new URL('../examples/demo-gym.json', import.meta.url), 'utf8'));
@@ -14,10 +15,16 @@ export async function kit(opts: { config?: SiteConfig; failMail?: () => boolean 
   await migrate(sql);
   let clock = new Date('2026-10-21T15:00:00Z');
   const mail: Outgoing[] = [];
+  const texts: SmsOut[] = [];
+  const inbound = new Map<string, ReceivedEmail>();
   const env: Env = {
     sql, secret: 'test-secret', publicUrl: 'https://mail.test', adminToken: 'admin-token', cronSecret: 'cron-token', webhookSecret: 'whsec_' + Buffer.from('hook-key').toString('base64'),
     now: () => clock,
     mailer: async (m) => { if (opts.failMail?.()) throw new Error('Resend 500: down'); mail.push(m); return { id: `re_${mail.length}` }; },
+    sms: async (m) => { texts.push(m); return { sid: `SM${texts.length}` }; },
+    twilioAuthToken: 'twilio-token',
+    inboundDomain: 'in.mail.test',
+    receivedEmail: async (id) => { const e = inbound.get(id); if (!e) throw new Error('no such email'); return e; },
   };
   const c = opts.config ?? demo();
   await sql(`INSERT INTO sites (id, config, hashes, updated_at) VALUES ($1,$2,$3,$4)`, [c.id, JSON.stringify(c), JSON.stringify(flowHashes(c)), clock.toISOString()]);
@@ -32,7 +39,8 @@ export async function kit(opts: { config?: SiteConfig; failMail?: () => boolean 
     return { status: r.status, headers: r.headers, text, json };
   };
   return {
-    env, sql, mail, call, site: c,
+    env, sql, mail, texts, inbound, call, site: c,
+    now: () => clock,
     advance: (ms: number) => { clock = new Date(clock.getTime() + ms); },
     subscribe: (email: string, extra: Record<string, unknown> = {}) => call('POST', '/api/subscribe', { site: c.id, form: 'popup-tour', email, first_name: 'Sam', anon_id: 'anon-aaaaaaaa', url: `${ORIGIN}/`, ...extra }),
   };

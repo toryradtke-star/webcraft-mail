@@ -1,0 +1,20 @@
+# Runs the service's due work (workflow waits, appointment reminders, texts held
+# for daytime, flow steps, broadcasts) every 5 minutes. Vercel Hobby's own cron
+# runs once a day. GitHub may start a scheduled run a few minutes late.
+name: tick
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Run due work
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SERVICE_URL: ${{ vars.SERVICE_URL || 'https://mail.webcraftmn.com' }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then echo "CRON_SECRET secret not set; skipping"; exit 0; fi
+          curl --fail --silent --show-error --max-time 60 -H "Authorization: Bearer $CRON_SECRET" "$SERVICE_URL/api/cron"

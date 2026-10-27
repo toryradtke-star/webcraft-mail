@@ -42,7 +42,7 @@ test('a signup stores consent, sends the welcome now and the second step two day
   assert.equal(m.subject, 'Your free week, Sam');
   assert.match(m.html, /100 Main St, Pine City/);
   assert.match(m.text, /Unsubscribe: https:\/\/mail\.test\/u\?t=/);
-  assert.match(m.unsubscribeUrl, /^https:\/\/mail\.test\/u\?t=/);
+  assert.match(m.unsubscribeUrl!, /^https:\/\/mail\.test\/u\?t=/);
   assert.ok(linksIn(m.html).some((l) => l.startsWith('https://mail.test/c?')), 'links are click-tracked');
 
   // Nothing more is due yet.
@@ -93,7 +93,7 @@ test('foreign origins, unknown sites, bad emails, bots and floods are refused', 
 test('unsubscribe: GET only asks, POST (button or one-click) unsubscribes and stops flows', async () => {
   const k = await kit();
   await k.subscribe('sam@example.com');
-  const t = tokenIn(k.mail[0].unsubscribeUrl);
+  const t = tokenIn(k.mail[0].unsubscribeUrl!);
   const ask = await k.call('GET', `/u?t=${t}`);
   assert.match(ask.text, /Stop getting emails from Northwoods Fitness/);
   assert.equal((await k.sql('SELECT status FROM profiles'))[0].status, 'subscribed');
@@ -244,8 +244,13 @@ test('forms endpoint gives forms only, with defaults filled in', async () => {
   const k = await kit();
   const r = await k.call('GET', '/api/forms?site=demo-gym');
   assert.equal(r.status, 200);
-  assert.equal(r.json.forms.length, 2);
+  assert.equal(r.json.forms.length, 3);
   assert.equal(r.json.forms[1].triggers.hideIfSubscribed, true);
+  const lead = r.json.forms[2];
+  assert.equal(lead.kind, 'lead');
+  assert.equal(lead.triggers.hideIfSubscribed, false, 'a contact form stays for people already on the list');
+  assert.deepEqual(lead.fields[4], { name: 'custom:goal', label: 'Main goal', type: 'select', options: ['Lose weight', 'Get stronger', 'Feel better'] });
+  assert.equal(r.json.crm, undefined);
   assert.equal(r.json.flows, undefined);
   assert.equal(JSON.stringify(r.json).includes('owner@'), false, 'no sender details leak');
 });

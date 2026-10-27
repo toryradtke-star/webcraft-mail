@@ -12,8 +12,10 @@
 import type { Sql } from './db.ts';
 import { durationMs, flowHash, type Flow, type SiteConfig, type Template } from './config.ts';
 import type { Mailer } from './mail.ts';
-import { renderEmail } from './render.ts';
+import { merge, renderEmail, toText } from './render.ts';
 import { sign, urlHash } from './tokens.ts';
+import type { ReceivedEmail, SmsSender } from './sms.ts';
+import { replyAddress } from './inbox.ts';
 
 export type Env = {
   sql: Sql;
@@ -28,6 +30,13 @@ export type Env = {
   now: () => Date;
   /** Milliseconds between Resend calls (its default limit is a few per second). */
   paceMs?: number;
+  /** Texts through Twilio; without it nothing is texted. */
+  sms?: SmsSender;
+  twilioAuthToken?: string;
+  /** Domain whose mail Resend receives (MX), for reply addresses: "in.webcraftmn.com". */
+  inboundDomain?: string;
+  /** Fetches a received email's content from Resend by id. */
+  receivedEmail?: (id: string) => Promise<ReceivedEmail>;
 };
 
 export type Site = { config: SiteConfig; hashes: Record<string, string> };
@@ -70,16 +79,27 @@ async function capLeft(env: Env, c: SiteConfig): Promise<number> {
   return (c.dailyCap ?? DEFAULT_CAP) - Number(r.n);
 }
 
-type Profile = { id: number; email: string; first_name: string | null; status: string };
+export type Profile = { id: number; email: string; first_name: string | null; status: string };
+
+export type DeliverOpts = {
+  /** Merge fields beyond first_name and site_name. */
+  vars?: Record<string, string | null | undefined>;
+  /** Footer line saying why they got it, for people who never signed up. */
+  reason?: string;
+  /** Put it in the contact's conversation, written by this author. */
+  log?: string;
+  attachments?: { filename: string; content: string; contentType?: string }[];
+};
 
 /**
  * Writes the send row, then calls Resend. Returns 'sent', 'failed' (will be
  * retried), or 'gave-up' after MAX_ATTEMPTS.
  */
-async function deliver(env: Env, c: SiteConfig, p: Profile, kind: 'flow' | 'broadcast', ref: string, templateId: string, t: Template, tags: Record<string, string>): Promise<'sent' | 'failed' | 'gave-up'> {
+export async function deliver(env: Env, c: SiteConfig, p: Profile, kind: 'flow' | 'broadcast' | 'workflow' | 'appointment', ref: string, templateId: string, t: Template, tags: Record<string, string>, o: DeliverOpts = {}): Promise<'sent' | 'failed' | 'gave-up'> {
   const now = env.now();
   const unsubscribeUrl = `${env.publicUrl}/u?t=${sign(env.secret, { k: 'unsub', p: p.id, s: c.id })}`;
-  const draft = renderEmail(c, t, { first_name: p.first_name, site_name: c.name }, { unsubscribeUrl });
+  const vars = { first_name: p.first_name, site_name: c.name, ...o.vars };
+  const draft = renderEmail(c, t, vars, { unsubscribeUrl, reason: o.reason });
   await env.sql(`INSERT INTO sends (site, profile_id, kind, ref, template, subject, status, at) VALUES ($1,$2,$3,$4,$5,$6,'sending',$7)
     ON CONFLICT (kind, ref, profile_id) DO NOTHING`, [c.id, p.id, kind, ref, templateId, draft.subject, iso(now)]);
   const [row] = await env.sql<{ id: string; status: string; attempts: number }>(
@@ -91,11 +111,17 @@ async function deliver(env: Env, c: SiteConfig, p: Profile, kind: 'flow' | 'broa
   }
   const sendId = Number(row.id);
   const link = (u: string) => `${env.publicUrl}/c?t=${sign(env.secret, { k: 'click', send: sendId, h: urlHash(u) })}&u=${encodeURIComponent(u)}`;
-  const mail = renderEmail(c, t, { first_name: p.first_name, site_name: c.name },
-    { unsubscribeUrl, link, openPixelUrl: `${env.publicUrl}/o?t=${sign(env.secret, { k: 'open', send: sendId })}` });
+  const mail = renderEmail(c, t, vars,
+    { unsubscribeUrl, link, reason: o.reason, openPixelUrl: `${env.publicUrl}/o?t=${sign(env.secret, { k: 'open', send: sendId })}` });
+  // On a CRM site, replies come back into the contact's conversation.
+  const replyTo = c.crm && env.inboundDomain ? replyAddress(env, p.id) : c.replyTo;
   try {
-    const r = await env.mailer({ from: c.from, to: p.email, replyTo: c.replyTo, subject: mail.subject, html: mail.html, text: mail.text, unsubscribeUrl, idempotencyKey: `wm-send-${sendId}`, tags: { site: c.id, kind, ...tags } });
+    const r = await env.mailer({ from: c.from, to: p.email, replyTo, subject: mail.subject, html: mail.html, text: mail.text, unsubscribeUrl, idempotencyKey: `wm-send-${sendId}`, tags: { site: c.id, kind, ...tags }, attachments: o.attachments });
     await env.sql(`UPDATE sends SET status = 'sent', resend_id = $2, at = $3, error = NULL WHERE id = $1`, [sendId, r.id, iso(env.now())]);
+    if (o.log) {
+      await env.sql(`INSERT INTO messages (site, contact_id, channel, direction, subject, body, status, provider_id, author, at) VALUES ($1,$2,'email','out',$3,$4,'sent',$5,$6,$7)
+        ON CONFLICT DO NOTHING`, [c.id, p.id, mail.subject, toText(merge(t.body, vars)), r.id, o.log, iso(env.now())]);
+    }
     return 'sent';
   } catch (err) {
     await env.sql(`UPDATE sends SET status = 'failed', error = $2 WHERE id = $1`, [sendId, (err as Error).message.slice(0, 500)]);
